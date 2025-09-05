@@ -1,0 +1,1939 @@
+{
+  "datasets": [
+    {
+      "name": "d61eca38",
+      "displayName": "vm_count_example_daily",
+      "queryLines": [
+        "-- ========================================================================================\n",
+        "-- This SQL query provides a per-instance, per-cluster, per-node-type, per-date breakdown\n",
+        "-- of Databricks VM usage, including whether the instance was a driver or worker, its specs,\n",
+        "-- autoscale settings, and its actual active minutes and average time alive during each date\n",
+        "-- \n",
+        "-- MAIN PURPOSE: \n",
+        "-- To allow in-depth usage, inventory, and operational analysis for each node\n",
+        "-- (driver or worker VM) that participated in any Databricks cluster in the past year.\n",
+        "-- Provides the ability to see how long each instance was alive, what type it was, and\n",
+        "-- how the cluster was configured to autoscale.\n",
+        "-- \n",
+        "-- Practical applications: \n",
+        "-- - Auditing and troubleshooting autoscaling and cluster node allocation.\n",
+        "-- - VM inventory and utilization analysis for cloud cost management or capacity planning.\n",
+        "-- - Reporting on lifecycle/lifetime of every VM per date\n",
+        "-- ========================================================================================\n",
+        "\n",
+        "SELECT\n",
+        "  nt.workspace_id,                                             -- Databricks workspace containing the cluster.\n",
+        "  nt.cluster_id,                                               -- Unique identifier for the cluster.\n",
+        "  c.cluster_name,                                              -- Human-readable name of the cluster.\n",
+        "  nt.node_type,                                                -- VM instance type (e.g., Standard_D16s_v3).\n",
+        "  nt.instance_id,                                              -- Unique ID for this specific VM (driver/worker node).\n",
+        "\n",
+        "  -- Flag each instance as DRIVER or WORKER depending on its role in the cluster:\n",
+        "  CASE WHEN nt.driver THEN 'DRIVER' ELSE 'WORKER' END AS instance_role, \n",
+        "  \n",
+        "  -- Format the cluster activity period\n",
+        "  DATE(nt.start_time) AS usage_day,  \n",
+        "\n",
+        "  -- Number of unique VMs (driver or worker) matching this group (in practice, just 1 due to the grouping).\n",
+        "  COUNT(DISTINCT nt.instance_id) AS unique_instances,         -- 1 line per minute\n",
+        "\n",
+        "  -- Total logical CPU cores = instance count × cores per instance (here, basically just per instance).\n",
+        "  nt_core.core_count * COUNT(DISTINCT nt.instance_id) AS total_cores,\n",
+        "  \n",
+        "  -- Total memory = instance count × memory per instance (in GB).\n",
+        "  (nt_core.memory_mb / 1024) * COUNT(DISTINCT nt.instance_id) AS total_memory_gb,\n",
+        "\n",
+        "  -- Minimum of autoscale worker limit for the cluster in the period (can indicate config changes over time).\n",
+        "  MIN(c.min_autoscale_workers) AS min_autoscale_workers,\n",
+        "  \n",
+        "  -- Maximum autoscale worker limit for the cluster over the period (will show you if this node could have scaled further).\n",
+        "  MAX(c.max_autoscale_workers) AS max_autoscale_workers,\n",
+        "\n",
+        "  -- The total number of minutes this specific VM (instance) reported running in the period (all timeline rows).\n",
+        "  COUNT(*) AS total_active_minutes,\n",
+        "\n",
+        "  -- Average number of minutes each instance was alive (for this group, will generally be the same as total_active_minutes).\n",
+        "  --COUNT(*) / COUNT(DISTINCT nt.instance_id) AS avg_active_minutes_per_instance,\n",
+        "\n",
+        "  -- Average instance lifetime expressed in hours (good for summary dashboards).\n",
+        "  (COUNT(*) / COUNT(DISTINCT nt.instance_id)) / 60 AS avg_active_hours_per_instance\n",
+        "\n",
+        "FROM\n",
+        "  system.compute.node_timeline nt\n",
+        "  -- Each row in node_timeline represents a minute of uptime for either a driver or worker node (instance) in a cluster.\n",
+        "\n",
+        "  LEFT JOIN system.compute.clusters c \n",
+        "    ON nt.cluster_id = c.cluster_id\n",
+        "    -- Join in cluster metadata (name, autoscale settings).\n",
+        "\n",
+        "  LEFT JOIN system.compute.node_types nt_core \n",
+        "    ON nt.node_type = nt_core.node_type\n",
+        "    -- Join in VM hardware specs (cores, memory).\n",
+        "\n",
+        "WHERE\n",
+        "  nt.start_time >= DATEADD(year, -1, CURRENT_DATE())\n",
+        "    -- Filter for nodes started in the last year. Adjust as required for your reporting window.\n",
+        "\n",
+        "GROUP BY\n",
+        "  nt.workspace_id,\n",
+        "  nt.cluster_id,\n",
+        "  c.cluster_name,\n",
+        "  nt.node_type,\n",
+        "  nt.driver,              -- Group by DRIVER/WORKER role\n",
+        "  nt.instance_id,         -- Group by each unique VM (so metrics reported per node, not aggregated)\n",
+        "  nt_core.core_count,\n",
+        "  nt_core.memory_mb,\n",
+        "  DATE(nt.start_time)\n",
+        "    -- Each group is: workspace, cluster, node type, date, and per-instance (per driver/worker node).\n",
+        "ORDER BY\n",
+        "  c.cluster_name, usage_day, nt.node_type;\n",
+        "    -- Organize output by cluster, period, and node type for easy review."
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "34ef65f0",
+      "displayName": "ACTIVE CLUSTER",
+      "layout": [
+        {
+          "widget": {
+            "name": "f36f4545",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "usage_day",
+                      "expression": "`usage_day`"
+                    },
+                    {
+                      "name": "workspace_id",
+                      "expression": "`workspace_id`"
+                    },
+                    {
+                      "name": "cluster_id",
+                      "expression": "`cluster_id`"
+                    },
+                    {
+                      "name": "cluster_name",
+                      "expression": "`cluster_name`"
+                    },
+                    {
+                      "name": "unique_instances",
+                      "expression": "`unique_instances`"
+                    },
+                    {
+                      "name": "instance_id",
+                      "expression": "`instance_id`"
+                    },
+                    {
+                      "name": "instance_role",
+                      "expression": "`instance_role`"
+                    },
+                    {
+                      "name": "node_type",
+                      "expression": "`node_type`"
+                    },
+                    {
+                      "name": "total_cores",
+                      "expression": "`total_cores`"
+                    },
+                    {
+                      "name": "total_memory_gb",
+                      "expression": "`total_memory_gb`"
+                    },
+                    {
+                      "name": "min_autoscale_workers",
+                      "expression": "`min_autoscale_workers`"
+                    },
+                    {
+                      "name": "max_autoscale_workers",
+                      "expression": "`max_autoscale_workers`"
+                    },
+                    {
+                      "name": "total_active_minutes",
+                      "expression": "`total_active_minutes`"
+                    },
+                    {
+                      "name": "avg_active_hours_per_instance",
+                      "expression": "`avg_active_hours_per_instance`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "usage_day",
+                    "dateTimeFormat": "DD/MM/YYYY",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "date",
+                    "displayAs": "datetime",
+                    "visible": true,
+                    "order": 0,
+                    "title": "Date",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "usage_day"
+                  },
+                  {
+                    "fieldName": "workspace_id",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 1,
+                    "title": "Workspace ID",
+                    "allowSearch": false,
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "cellFormat": {
+                      "default": {
+                        "foregroundColor": null
+                      },
+                      "rules": []
+                    },
+                    "displayName": "workspace_id"
+                  },
+                  {
+                    "fieldName": "cluster_id",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 2,
+                    "title": "Cluster ID",
+                    "allowSearch": false,
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "cluster_id"
+                  },
+                  {
+                    "fieldName": "cluster_name",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 3,
+                    "title": "Cluster Name",
+                    "allowSearch": true,
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "cluster_name"
+                  },
+                  {
+                    "fieldName": "unique_instances",
+                    "numberFormat": "0",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 4,
+                    "title": "Unique Instances",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "unique_instances"
+                  },
+                  {
+                    "fieldName": "instance_id",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 5,
+                    "title": "Instance ID",
+                    "allowSearch": false,
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "instance_id"
+                  },
+                  {
+                    "fieldName": "instance_role",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 6,
+                    "title": "Instance Role",
+                    "allowSearch": false,
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "instance_role"
+                  },
+                  {
+                    "fieldName": "node_type",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "string",
+                    "displayAs": "string",
+                    "visible": true,
+                    "order": 7,
+                    "title": "Node Type",
+                    "allowSearch": false,
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "node_type"
+                  },
+                  {
+                    "fieldName": "total_cores",
+                    "numberFormat": "0",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 8,
+                    "title": "Total Cores",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "total_cores"
+                  },
+                  {
+                    "fieldName": "total_memory_gb",
+                    "numberFormat": "0",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 9,
+                    "title": "Total Memory (GB)",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "total_memory_gb"
+                  },
+                  {
+                    "fieldName": "min_autoscale_workers",
+                    "numberFormat": "0",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 10,
+                    "title": "Min Autoscaling Workers",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "min_autoscale_workers"
+                  },
+                  {
+                    "fieldName": "max_autoscale_workers",
+                    "numberFormat": "0",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 11,
+                    "title": "Max Autoscaling Workers",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "max_autoscale_workers"
+                  },
+                  {
+                    "fieldName": "total_active_minutes",
+                    "numberFormat": "0",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "integer",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 12,
+                    "title": "Total Active Minutes",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "total_active_minutes"
+                  },
+                  {
+                    "fieldName": "avg_active_hours_per_instance",
+                    "numberFormat": "0.00",
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "imageHeight": "",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkOpenInNewTab": true,
+                    "type": "float",
+                    "displayAs": "number",
+                    "visible": true,
+                    "order": 13,
+                    "title": "Avg Active Hours per Instance",
+                    "allowSearch": false,
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "highlightLinks": false,
+                    "useMonospaceFont": false,
+                    "preserveWhitespace": false,
+                    "displayName": "avg_active_hours_per_instance"
+                  }
+                ]
+              },
+              "invisibleColumns": [],
+              "allowHTMLByDefault": false,
+              "itemsPerPage": 25,
+              "paginationSize": "default",
+              "condensed": true,
+              "withRowNumber": true,
+              "frame": {
+                "showTitle": true,
+                "title": "Detailed View"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 26,
+            "width": 6,
+            "height": 11
+          }
+        },
+        {
+          "widget": {
+            "name": "8da2a8a8",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "workspace_id",
+                      "expression": "`workspace_id`"
+                    },
+                    {
+                      "name": "cluster_id",
+                      "expression": "`cluster_id`"
+                    },
+                    {
+                      "name": "cluster_name",
+                      "expression": "`cluster_name`"
+                    },
+                    {
+                      "name": "monthly(usage_day)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `usage_day`)"
+                    },
+                    {
+                      "name": "sum(unique_instances)",
+                      "expression": "SUM(`unique_instances`)"
+                    }
+                  ],
+                  "cubeGroupingSets": {
+                    "sets": [
+                      {
+                        "fieldNames": [
+                          "workspace_id",
+                          "cluster_id",
+                          "cluster_name"
+                        ]
+                      },
+                      {
+                        "fieldNames": [
+                          "monthly(usage_day)"
+                        ]
+                      }
+                    ]
+                  },
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "ASC",
+                      "expression": "`workspace_id`"
+                    },
+                    {
+                      "direction": "ASC",
+                      "expression": "`cluster_id`"
+                    },
+                    {
+                      "direction": "ASC",
+                      "expression": "`cluster_name`"
+                    },
+                    {
+                      "direction": "ASC",
+                      "expression": "DATE_TRUNC(\"MONTH\", `usage_day`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pivot",
+              "encodings": {
+                "rows": [
+                  {
+                    "fieldName": "workspace_id",
+                    "displayName": "WORKSPACE ID"
+                  },
+                  {
+                    "fieldName": "cluster_id",
+                    "displayName": "CLUSTER ID"
+                  },
+                  {
+                    "fieldName": "cluster_name",
+                    "displayName": "CLUSTER NAME"
+                  }
+                ],
+                "columns": [
+                  {
+                    "fieldName": "monthly(usage_day)",
+                    "format": {
+                      "type": "date",
+                      "date": "locale-short-month",
+                      "leadingZeros": true
+                    },
+                    "displayName": "DATE"
+                  }
+                ],
+                "cell": {
+                  "type": "multi-cell",
+                  "fields": [
+                    {
+                      "fieldName": "sum(unique_instances)",
+                      "cellType": "text",
+                      "style": {
+                        "type": "basic",
+                        "rules": [
+                          {
+                            "condition": {
+                              "operator": ">=",
+                              "operand": {
+                                "type": "data-value",
+                                "value": "0"
+                              }
+                            },
+                            "backgroundColor": "#83F5B0"
+                          }
+                        ]
+                      },
+                      "displayName": "-"
+                    }
+                  ]
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Instance Count Per Workspace per Month"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "08e21df3",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "node_type",
+                      "expression": "`node_type`"
+                    },
+                    {
+                      "name": "sum(unique_instances)",
+                      "expression": "SUM(`unique_instances`)"
+                    },
+                    {
+                      "name": "sum(total_cores)",
+                      "expression": "SUM(`total_cores`)"
+                    },
+                    {
+                      "name": "sum(total_memory_gb)",
+                      "expression": "SUM(`total_memory_gb`)"
+                    },
+                    {
+                      "name": "sum(avg_active_hours_per_instance)",
+                      "expression": "SUM(`avg_active_hours_per_instance`)"
+                    }
+                  ],
+                  "cubeGroupingSets": {
+                    "sets": [
+                      {
+                        "fieldNames": [
+                          "node_type"
+                        ]
+                      },
+                      {}
+                    ]
+                  },
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "ASC",
+                      "expression": "`node_type`"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pivot",
+              "encodings": {
+                "rows": [
+                  {
+                    "fieldName": "node_type",
+                    "headerWidth": 169,
+                    "displayName": "VM Type"
+                  }
+                ],
+                "cell": {
+                  "type": "multi-cell",
+                  "fields": [
+                    {
+                      "fieldName": "sum(unique_instances)",
+                      "cellType": "text",
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": "#8FC2A6"
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Number of Instances"
+                    },
+                    {
+                      "fieldName": "sum(total_cores)",
+                      "cellType": "text",
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": {
+                          "themeColorType": "visualizationColors",
+                          "position": 7
+                        }
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Number of Cores"
+                    },
+                    {
+                      "fieldName": "sum(total_memory_gb)",
+                      "cellType": "text",
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": "#5AB47E"
+                      },
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Memory Alocation (GB)"
+                    },
+                    {
+                      "fieldName": "sum(avg_active_hours_per_instance)",
+                      "cellType": "text",
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 2
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": "#4E7A60"
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Active Hours"
+                    }
+                  ],
+                  "displayAs": "columns"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Instance Count Per Node Type (VM Type)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 14,
+            "width": 4,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "019d4426",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "count(*)",
+                      "expression": "COUNT(`*`)"
+                    },
+                    {
+                      "name": "node_type",
+                      "expression": "`node_type`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pie",
+              "encodings": {
+                "angle": {
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "displayName": "Count of Records"
+                },
+                "color": {
+                  "fieldName": "node_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "legend": {
+                    "position": "right",
+                    "hide": false,
+                    "hideTitle": true
+                  },
+                  "displayName": "-"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "VM Type Distribution"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 2,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "566c0c7e",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# ACTIVE CLUSTERS\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "e62fe717",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "node_type",
+                      "expression": "`node_type`"
+                    },
+                    {
+                      "name": "monthly(usage_day)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `usage_day`)"
+                    },
+                    {
+                      "name": "sum(unique_instances)",
+                      "expression": "SUM(`unique_instances`)"
+                    },
+                    {
+                      "name": "sum(total_cores)",
+                      "expression": "SUM(`total_cores`)"
+                    },
+                    {
+                      "name": "sum(total_memory_gb)",
+                      "expression": "SUM(`total_memory_gb`)"
+                    },
+                    {
+                      "name": "sum(avg_active_hours_per_instance)",
+                      "expression": "SUM(`avg_active_hours_per_instance`)"
+                    }
+                  ],
+                  "cubeGroupingSets": {
+                    "sets": [
+                      {
+                        "fieldNames": [
+                          "node_type"
+                        ]
+                      },
+                      {
+                        "fieldNames": [
+                          "monthly(usage_day)"
+                        ]
+                      }
+                    ]
+                  },
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "ASC",
+                      "expression": "`node_type`"
+                    },
+                    {
+                      "direction": "ASC",
+                      "expression": "DATE_TRUNC(\"MONTH\", `usage_day`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pivot",
+              "encodings": {
+                "rows": [
+                  {
+                    "fieldName": "node_type",
+                    "headerWidth": 169,
+                    "displayName": "VM Type"
+                  }
+                ],
+                "columns": [
+                  {
+                    "fieldName": "monthly(usage_day)",
+                    "format": {
+                      "type": "date",
+                      "date": "locale-short-month",
+                      "leadingZeros": true
+                    },
+                    "displayTotal": true,
+                    "displayName": "Monthly"
+                  }
+                ],
+                "cell": {
+                  "type": "multi-cell",
+                  "fields": [
+                    {
+                      "fieldName": "sum(unique_instances)",
+                      "cellType": "text",
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": "#8FC2A6"
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Instances"
+                    },
+                    {
+                      "fieldName": "sum(total_cores)",
+                      "cellType": "text",
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": {
+                          "themeColorType": "visualizationColors",
+                          "position": 7
+                        }
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Cores"
+                    },
+                    {
+                      "fieldName": "sum(total_memory_gb)",
+                      "cellType": "text",
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": "#5AB47E"
+                      },
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Memory (GB)"
+                    },
+                    {
+                      "fieldName": "sum(avg_active_hours_per_instance)",
+                      "cellType": "text",
+                      "format": {
+                        "type": "number-plain",
+                        "abbreviation": "none",
+                        "decimalPlaces": {
+                          "type": "exact",
+                          "places": 0
+                        },
+                        "hideGroupSeparator": true
+                      },
+                      "style": {
+                        "type": "basic",
+                        "backgroundColor": "#4E7A60"
+                      },
+                      "contentAlignment": "center",
+                      "displayName": "Active Hours"
+                    }
+                  ],
+                  "displayAs": "columns"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Active Instance count per Node Type="
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 20,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "c28d08d1",
+            "queries": [
+              {
+                "name": "dashboards/01f07176d1d51fb19b6b0a261fcbdeea/datasets/01f0744e4af61b01b6bbb8262ba31d51_node_type",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "node_type",
+                      "expression": "`node_type`"
+                    },
+                    {
+                      "name": "node_type_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "node_type",
+                    "displayName": "node_type",
+                    "queryName": "dashboards/01f07176d1d51fb19b6b0a261fcbdeea/datasets/01f0744e4af61b01b6bbb8262ba31d51_node_type"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "FILTER BY VM TYPE"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "0efc6406",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "sum(unique_instances)",
+                      "expression": "SUM(`unique_instances`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(unique_instances)",
+                  "displayName": "Sum of unique_instances"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Number of Instances"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "b604bea9",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "sum(total_cores)",
+                      "expression": "SUM(`total_cores`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(total_cores)",
+                  "displayName": "Sum of total_cores"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Number of Cores"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "26114d6a",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "sum(total_memory_gb)",
+                      "expression": "SUM(`total_memory_gb`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(total_memory_gb)",
+                  "format": {
+                    "type": "number-plain",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  },
+                  "displayName": "Sum of total_memory_gb"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Memory Usage (GB)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 4
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "name": "0216fa2e",
+      "displayName": "TIMELINE",
+      "layout": [
+        {
+          "widget": {
+            "name": "220016a9",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "daily(usage_day)",
+                      "expression": "DATE_TRUNC(\"DAY\", `usage_day`)"
+                    },
+                    {
+                      "name": "sum(unique_instances)",
+                      "expression": "SUM(`unique_instances`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "area",
+              "encodings": {
+                "x": {
+                  "fieldName": "daily(usage_day)",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "hideTitle": true,
+                    "labelAngle": 0
+                  },
+                  "format": {
+                    "type": "date",
+                    "date": "locale-number-month",
+                    "leadingZeros": true
+                  },
+                  "displayName": "usage_day"
+                },
+                "y": {
+                  "fieldName": "sum(unique_instances)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "displayName": "Unique Instances"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Number of Instances"
+              },
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 2
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "dba0eb32",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "daily(usage_day)",
+                      "expression": "DATE_TRUNC(\"DAY\", `usage_day`)"
+                    },
+                    {
+                      "name": "sum(total_cores)",
+                      "expression": "SUM(`total_cores`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "area",
+              "encodings": {
+                "x": {
+                  "fieldName": "daily(usage_day)",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "hideTitle": true,
+                    "labelAngle": 0
+                  },
+                  "format": {
+                    "type": "date",
+                    "date": "locale-number-month",
+                    "leadingZeros": true
+                  },
+                  "displayName": "usage_day"
+                },
+                "y": {
+                  "fieldName": "sum(total_cores)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "displayName": "Number of Cores"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Number of Cores Allocated"
+              },
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 2
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "7025dc90",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "daily(usage_day)",
+                      "expression": "DATE_TRUNC(\"DAY\", `usage_day`)"
+                    },
+                    {
+                      "name": "sum(total_memory_gb)",
+                      "expression": "SUM(`total_memory_gb`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "area",
+              "encodings": {
+                "x": {
+                  "fieldName": "daily(usage_day)",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "axis": {
+                    "hideTitle": true,
+                    "labelAngle": 0
+                  },
+                  "format": {
+                    "type": "date",
+                    "date": "locale-number-month",
+                    "leadingZeros": true
+                  },
+                  "displayName": "usage_day"
+                },
+                "y": {
+                  "fieldName": "sum(total_memory_gb)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "displayName": "Number of Cores"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Memory Allocated (GB)"
+              },
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 2
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "name": "d84a8955",
+      "displayName": "READ.ME",
+      "layout": [
+        {
+          "widget": {
+            "name": "acb319b8",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Instance Count for understanding you VM usage and Allocation\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "82c6abec",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Databricks VM Usage Analysis SQL\n",
+                "\n",
+                "This SQL query provides a **per-instance, per-cluster, per-node-type, per-date breakdown** of Databricks VM usage, including:\n",
+                "\n",
+                "- Whether the instance was a **driver or worker**\n",
+                "- VM hardware specs (cores, memory)\n",
+                "- Cluster autoscale settings (min/max workers)\n",
+                "- Actual minutes active and average time alive for each date\n",
+                "\n",
+                "---\n",
+                "\n",
+                "## Main Purpose\n",
+                "\n",
+                "- Enable in-depth usage, inventory, and operational analysis for each node (driver or worker VM) that participated in any Databricks cluster in the past year.\n",
+                "- See how long each instance was alive, which type it was, and how the cluster was configured to autoscale.\n",
+                "\n",
+                "---\n",
+                "\n",
+                "## Practical Applications\n",
+                "\n",
+                "- **Auditing and troubleshooting** autoscaling and cluster node allocation  \n",
+                "- **VM inventory and utilization analysis** for cloud cost management or capacity planning  \n",
+                "- **Reporting** on lifecycle/lifetime of every VM per day  \n",
+                "\n",
+                "---\n",
+                "\n",
+                "> Use this query to support granular, daily operational analytics and roll up results as needed for week/month dashboards.\n",
+                "\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 9
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "name": "d016d69b",
+      "displayName": "Global Filters",
+      "layout": [
+        {
+          "widget": {
+            "name": "e8a8449e",
+            "queries": [
+              {
+                "name": "dashboards/01f07f5fa78911569be7afce5b68cb6a/datasets/01f07f7d8abf18168257dcff70377acb_workspace_id",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "workspace_id",
+                      "expression": "`workspace_id`"
+                    },
+                    {
+                      "name": "workspace_id_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_id",
+                    "displayName": "workspace_id",
+                    "queryName": "dashboards/01f07f5fa78911569be7afce5b68cb6a/datasets/01f07f7d8abf18168257dcff70377acb_workspace_id"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "WORKSPACE ID"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "e8b6e549",
+            "queries": [
+              {
+                "name": "dashboards/01f07176d1d51fb19b6b0a261fcbdeea/datasets/01f0744e4af61b01b6bbb8262ba31d51_cluster_id",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "cluster_id",
+                      "expression": "`cluster_id`"
+                    },
+                    {
+                      "name": "cluster_id_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "cluster_id",
+                    "displayName": "cluster_id",
+                    "queryName": "dashboards/01f07176d1d51fb19b6b0a261fcbdeea/datasets/01f0744e4af61b01b6bbb8262ba31d51_cluster_id"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "CLUSTER ID"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "a7d4b2b8",
+            "queries": [
+              {
+                "name": "dashboards/01f07176d1d51fb19b6b0a261fcbdeea/datasets/01f0744e4af61b01b6bbb8262ba31d51_usage_day",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "usage_day",
+                      "expression": "`usage_day`"
+                    },
+                    {
+                      "name": "usage_day_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "usage_day",
+                    "displayName": "usage_day",
+                    "queryName": "dashboards/01f07176d1d51fb19b6b0a261fcbdeea/datasets/01f0744e4af61b01b6bbb8262ba31d51_usage_day"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "DATE"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "9ba59c03",
+            "queries": [
+              {
+                "name": "dashboards/01f07f5fa78911569be7afce5b68cb6a/datasets/01f07f7d8abf18168257dcff70377acb_cluster_name",
+                "query": {
+                  "datasetName": "d61eca38",
+                  "fields": [
+                    {
+                      "name": "cluster_name",
+                      "expression": "`cluster_name`"
+                    },
+                    {
+                      "name": "cluster_name_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "cluster_name",
+                    "displayName": "cluster_name",
+                    "queryName": "dashboards/01f07f5fa78911569be7afce5b68cb6a/datasets/01f07f7d8abf18168257dcff70377acb_cluster_name"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "CLUSTER NAME"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 1,
+            "height": 2
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    }
+  }
+}
